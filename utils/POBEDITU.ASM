@@ -1,0 +1,2467 @@
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	PROGRAM
+;		POBEDIT
+;	AUTHOR
+;		ALIKBEROV
+;	VERSION
+;		2023.04.27
+;	SPECIALS
+;		F000-F7FF ROM
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+GETKEY	EQU	0F803H
+PUTC	EQU	0F809H
+KEYCHK	EQU	0F812H
+STROUT	EQU	0F818H
+INKEY	EQU	0F81BH
+;;;;;;;;;;;;;;;;;;;;;;;;;
+DIRECX	EQU	0FFD3H	; MONITOR DIRECTIVE X
+;;;;;;;;;;;;;;;;;;;;;;;;;
+I8275D	EQU	0C000H	; I8275 DATA
+I8275C	EQU	0C001H	; I8275 CONTROL
+I8275LP	EQU	060H	; LIGHT PEN READ
+I8275XY	EQU	080H	; POSITION SET
+;;;;;;;;;;;;;;;;;;;;;;;;;
+PRSKEY	EQU	07605H	; KEY PRESS FLAG
+MONKEY	EQU	07609H	; MONITOR PRESSED KEY CODE
+TMP	EQU	0760DH	; SAVED SP (TAPE IN)
+TMPA	EQU	07633H	; SAVED A (TAPE IN)
+BUDDY	EQU	07614H	; X_PC: USER CODE
+SHEET	EQU	07616H	; X_HL: HL-ADDRESS
+INDEX	EQU	07618H	; X_BC: ROW INDEX
+CURX	EQU	0761AH	; X_DE: E-REGISTER
+CURY	EQU	0761BH	; X_DE: D-REGISTER
+LINE	EQU	0761CH	; X_SP: SP-BUFFER (ACTIVE LINE)
+FLAGS	EQU	0761EH	; X_AF: PSW-REGISTER
+PANX	EQU	0761FH	; X_AF: A-REGISTER
+;;;;;;;;;;;;;;;;;;;;;;;;;
+PARAM1	EQU	07627H	; PARAMETER #1
+PARAM2	EQU	07629H	; PARAMETER #2 (LIGHT PEN CORRECTION)
+PARAM3	EQU	0762BH	; PARAMETER #3 (STYLE)
+PARAMS	EQU	0762DH	; FEW PARAMETERS FLAG
+;;;;;;;;;;;;;;;;;;;;;;;;;
+TEXT	EQU	07638H	; X_HL: HL-ADDRESS
+LINEBK	EQU	07634H	; BACK UP 25 LINES (MONITOR CONSOLE BUFFER)
+LINE00	EQU	07636H	; TOP ROW
+LINE01	EQU	07638H	; FIRST ROW (+2) ARRAY
+LINE25	EQU	07668H	; LAST ROW (+50)
+LINE26	EQU	0766AH	; BOTTOM ROW (+52)
+;;;;;;;;;;;;;;;;;;;;;;;;;
+INDEX0	EQU	0766CH	; TOP INDEX (+54)
+INDEX9	EQU	0766EH	; BOTTOM INDEX (+56)
+;;;;;;;;;;;;;;;;;;;;;;;;;
+JUMP	EQU	07626H	; JMP COMMAND
+JUMPTO	EQU	07627H	; JMP ADDRESS
+;;;;;;;;;;;;;;;;;;;;;;;;;
+TABULS	EQU	07629H	; STYLE OF TABULATION
+SIDEL	EQU	0762AH	; STYLE OF LEFT SIDE
+SIDER	EQU	0762BH	; STYLE OF RIGHT SIDE
+DIGITS	EQU	0762DH	; LINE NUMBERS MASK
+PENCOR	EQU	0762EH	; LIGHT PEN CORRECTION (TAPE-IN MASK)
+OVRPAN	EQU	07633H	; OVERFLOW OF PANNING
+;;;;;;;;;;;;;;;;;;;;;;;;
+	ORG	0F000H
+PAD000:	JMP	PAD;INI
+PADRUN:	JMP	PADDY		; RUN THE PAD WITH BUDDY
+PLESET:	SHLD	SHEET		; RESET THE LISTING
+PLENEW:	JMP	LENEW		; SET THE LISTING
+PANHOR:	JMP	TXTPAN
+PANVER:	JMP	TXTSCR
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	PUSH SCREEN ADDRESS
+;	BY IMMEDIATE X & Y BYTES
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+PUSHXY:	XTHL
+	MOV	E,M
+	INX	H
+	MOV	D,M
+	INX	H
+	XTHL
+	MOV	L,L
+	MOV	C,C
+	MOV	D,D
+MUL78:	PUSH	PSW
+	PUSH	B
+	MVI	B,000H
+	MOV	H,B
+	MOV	C,D
+	MOV	L,C
+	DAD	H
+	DAD	H
+	DAD	H
+	DAD	B
+	DAD	H
+	DAD	B
+	DAD	H
+	DAD	B
+	DAD	H
+	MOV	C,E
+	DAD	B
+	LXI	B,076D0H
+	DAD	B
+	POP	B
+	;POP	D
+	;RET
+	POP	PSW
+	XTHL
+	PCHL
+PADCUR:	XCHG
+	SHLD	CURX
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	L,H - CURSOR X,Y
+;;;;;;;;;;;;;;;;;;;;;;;;;
+CURSET:	CALL	LINEBY
+	MOV	E,M
+	INX	H
+	MOV	D,M
+	LXI	H,00308H
+CNSXY	EQU	$-2
+	XCHG
+	SHLD	LINE
+	MOV	H,A
+	LDA	CURX
+	ANI	03FH
+	MOV	L,A
+	MOV	A,E
+	DAD	D
+	LXI	D,I8275C
+	XCHG
+	MVI	M,I8275XY
+	DCX	H
+	MOV	M,E
+	MOV	M,D
+	MOV	E,A
+	CALL	MUL78
+	POP	H
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	TERMINAL INPUT
+;	SUPPORT FOR KEYBOARD
+;	SUPPORT FOR LIGHT PEN INTERFACE
+;;;;;;;;;;;;;;;;;;;;;;;;;
+TERMOS:	LDA	MONKEY
+	INR	A
+	RNZ
+	JMP	FLAG1S
+;;;;;;;;;;;;;;;;;;;;;;
+TERMIN:	LDA	I8275C
+	XRI	020H
+	ANI	030H
+	JNZ	TERMIN
+TERMIT:	CALL	CALLER
+	LDA	FLAGS
+	PUSH	PSW
+	RRC
+	ORI	040H
+	ADD	A
+	PUSH	PSW
+	CC	LENUM
+	POP	PSW
+	CALL	LIST
+	POP	PSW
+	ANI	092H
+	STA	FLAGS
+TERMKY:	LHLD	CURX
+	XCHG
+	CALL	KEYCHK
+	ORA	A
+	JNZ	GETKEY
+	LXI	B,TERMKY
+	PUSH	B
+TERMLP:	LHLD	TERMIN+1
+	MOV	A,M
+	ANI	010H
+	JZ	TERMOS
+	PUSH	H
+	CALL	SHRINK
+	POP	H
+	MVI	M,I8275LP
+	DCX	H
+	LDA	PENCOR
+	ADD	M
+	MOV	D,M
+	LHLD	CNSXY
+	SUB	L;SUI	00AH
+	JC	TXTPAN
+	CPI	040H
+	JNC	TXTPAN
+	MOV	E,A
+	MOV	A,D
+	SUB	H;SUI	003H
+	JC	TXTSCR
+	CPI	019H
+	JNC	TXTSCR
+	MOV	D,A
+	LHLD	CURX
+	XCHG
+	SHLD	CURX
+	LDA	FLAGS
+	ANI	081H
+	MOV	C,A
+	ORI	004H
+	MOV	B,A
+	MOV	A,D
+	CMP	H
+	JNZ	TERMCU
+	MOV	A,E
+	CMP	L
+	JNZ	TERMCU
+	MOV	C,B
+TERMCU:	MOV	A,C
+	STA	FLAGS
+	POP	B
+	CNZ	CURSET
+	JMP	TERMIN
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	DB	'PANING'
+PADUP:	PUSH	D
+	CALL	SHRINK
+	POP	D
+	DCR	D
+	JP	PADCUR
+TXTBCK:	STC
+;	JMP	TXTSCR
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	TEXT VERTICAL SCROLLING
+;	CF=0 - BACK
+;	CF=1 - FORWARD
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+TXTSCR:	PUSH	PSW
+	CALL	SHRINK
+	POP	PSW
+	CALL	RENUM
+	RZ
+	PUSH	PSW
+;	LHLD	LINE01
+;	SHLD	TEXT
+;	CALL	LENUM
+	CALL	CURSET
+	POP	PSW
+	CALL	SCROLL
+	CALL PUSHXY
+	DB 2,3
+	POP B
+;	LHLD	TOPIDX
+;	MOV	B,H
+;	MOV	C,L
+	LHLD	INDEX0	;POINTS+54
+	PUSH	PSW
+	CC	PUTHLW
+	POP	PSW
+	CALL	DAADD
+	SHLD	INDEX0	;POINTS+54
+	CALL PUSHXY
+	DB 2,27
+	POP B
+;	LHLD	BTNIDX
+;	MOV	B,H
+;	MOV	C,L
+	LHLD	INDEX9	;POINTS+56
+	PUSH	PSW
+	CNC	PUTHLW
+	POP	PSW
+	CALL	DAADD
+	SHLD	INDEX9	;POINTS+56
+	LHLD	LINE25	;POINTS+50
+	PUSH H
+;	LHLD	BTNROW
+	CALL PUSHXY
+	DB 6,27
+	POP H
+	POP D
+	MVI	A,000H
+	INR	A
+	JNC	LIST
+	LHLD	LINE01	;POINTS+2
+	PUSH H
+;	LHLD	TOPROW
+	CALL PUSHXY
+	DB 6,3
+	POP H
+	POP D
+	CMC
+;	JMP	LIST
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	CF=1: PRINT LISTING PART
+;	CF=0: PRINT LISTING ROW
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+LIST:	LDA	PANX
+	MOV	B,A
+	JC	LISTOK
+	PUSH	D
+	JP	LISTOS
+	PUSH	B
+	CALL	CURSET
+	POP	B
+	DCX	H
+	DCX	H
+	XCHG
+	LHLD	LINE
+	XCHG
+LISTOS:	XRA	A
+	JMP	LIST1
+LISTOK:	MVI	A,018H
+;	LHLD	TOPROW
+	;PUSH B
+	CALL PUSHXY
+	DB 6,3
+	POP H
+	;POP B
+	LXI	D,LINE01	;POINTS+2
+	PUSH	D
+LISTY:	XTHL
+	MOV	E,M
+	INX	H
+	MOV	D,M
+	INX	H
+	XTHL
+LIST1:	PUSH	D
+	MOV	E,A
+	MOV	A,B
+	DCR	A
+	MVI	A,01DH
+	JNZ	LISTAR
+	LDA	SIDEL
+LISTAR:	MOV	M,A
+	INX	H
+	MVI	M,000H
+	INX	H
+	XTHL
+	MVI	D,64
+	MOV	C,B
+LISTEN:	DCR	C
+	JZ	LISTER-2
+	MOV	A,M
+	ORA	A
+	JZ	LIST00-1
+	CPI	00DH
+	JZ	LISTAS
+	CPI	00AH
+	JZ	LISTAS
+	INX	H
+	CPI	009H
+	JNZ	LISTEN
+	MOV	A,B
+	SUB	C
+	ANI	007H
+	JZ	LISTEN
+	XRI	007H
+LIST09:	DCR	C
+	JZ	LISTAB-2
+LIST19:	DCR	A
+	JP	LIST09
+	JMP	LISTEN
+	XTHL
+	INR	C
+LISTER:	XTHL
+	MOV	A,M
+	ORA	A
+	JZ	LIST00-1
+	CPI	00DH
+	JZ	LIST00-1
+	CPI	00AH
+	JZ	LIST00-1
+	INX	H
+	CPI	009H
+	JNZ	LISTAS
+LISTA2:	MOV	A,B
+	SUB	C
+	CMA
+	ANI	007H
+	DCR	C
+	INR	C
+	XTHL
+LISTAB:	PUSH	PSW
+	LDA	TABULS
+	MOV	M,A
+	POP	PSW
+	DCR	C
+	INX	H
+	DCR	D
+	JZ	LISTOV
+	JM	LISTOV
+	DCR	A
+	JP	LISTAB
+	JMP	LISTER
+	XTHL
+LIST00:	MOV	M,A
+	INX	H
+	DCR	D
+	JNZ	LIST00
+LISTED:	LDA	SIDER
+	JMP	LISTEX
+LISTAS:	XTHL
+	DCR	C
+	MOV	M,A
+	INX	H
+	DCR	D
+	JNZ	LISTER
+	XTHL
+	MOV	A,M
+	XTHL
+	CPI	00AH
+	JZ	LISTED
+	CPI	00DH
+	JZ	LISTED
+LISTOV:	MVI	A,00EH
+LISTEX:	MVI	D,000H
+	MOV	M,D
+	INX	H
+	MOV	M,A
+	MOV	A,E
+	MVI	E,00BH
+	DAD	D
+	DCR	A
+	POP	D
+	JP	LISTY
+	POP	D
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	CALLBACK FOR CONTROL KEYS
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+CALLKY:	LDA	FLAGS
+	ORI	041H
+	STA	FLAGS
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	SHRINK EDITED LINE
+;;;;;;;;;;;;;;;;;;;;;;;;;
+SHRINK:	LDA	FLAGS
+	XRI	080H
+	RM
+	STA	FLAGS
+	LHLD	LINE
+	MOV	A,H
+	ORA	L
+	JZ	LENUM
+UNEXPA:	MOV	A,M
+	ORA	A
+	JZ	LENUM
+	CPI	00DH
+	JZ	LENUM
+	INX	H
+	CPI	00AH
+	JNZ	UNEXPA
+	DCX	H
+	MOV	D,H
+	MOV	E,L
+SHRIN1:	MOV	A,M
+	INX	H
+	ORA	A
+	JZ	SHRIN2
+	CPI	00AH
+	JZ	SHRIN1
+	DCX	H
+SHRIN2:	MOV	A,M
+	INX	H
+SHRIN3:	STAX	D
+	INX	D
+	ORA	A
+	JNZ	SHRIN2
+;	JMP	LENUM
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	LINES ENUMERATOR
+;;;;;;;;;;;;;;;;;;;;;;;;;
+LENUM:	LHLD	TEXT
+LENEW:	SHLD	TEXT
+	PUSH	H
+	MOV	B,H
+	MOV	C,L
+	XRA	A
+	MOV	D,A
+	MOV	E,A
+	MOV	H,A
+	MOV	L,A
+; FIRST DISPLAYED LINE COUNTER
+LENUMC:	INX	H
+	XCHG
+	SHLD	INDEX0
+	XCHG
+	MOV	A,E
+	ADI	001H
+	DAA
+	MOV	E,A
+	MOV	A,D
+	ACI	000H
+	DAA
+	MOV	D,A
+	ADI	0FFH
+	SBB	A
+	ORA	E
+	CPI	027H
+	JNC	LENUMB
+	PUSH	B
+	XTHL
+	SHLD	LINEBK
+	POP	H
+; TEXT TRACE BACK
+LENUMB:	DCX	B
+	LDAX	B
+	CPI	00DH
+	JZ	LENUMC
+	ORA	A
+	JNZ	LENUMB
+	SHLD	INDEX
+	LXI	H,LINE01	;POINTS+2
+	MVI	M,019H
+	XTHL
+; FIRST DISPLAYED LINE ALIGNER
+LENUMA:	DCX	H
+	MOV	A,M
+	ORA	A
+	JZ	LENUMP
+	CPI	00DH
+	JNZ	LENUMA
+	PUSH	H
+; LINE OVER TOP
+LENUMO:	DCX	H
+	MOV	A,M
+	ORA	A
+	JZ	LENUMI
+	CPI	00DH
+	JNZ	LENUMO
+; INCLUDING OVER
+LENUMI:	INX	H
+	SHLD	LINE00	;POINTS
+;	XCHG
+;	SHLD	INDEX0	;POINTS+54
+;	XCHG
+	POP	H
+; TEXT LINES ENUMERATION PREPARE
+LENUMP:	INX	H
+	PUSH	H
+;	LHLD	TOPIDX
+;	XTHL
+;	POP	B
+	PUSH D
+	CALL PUSHXY
+	DB 2,3
+	POP B
+	POP D
+	POP H
+LENUMR:	XCHG
+	XTHL
+	MOV	A,M
+	MOV	M,E
+	INX	H
+	MOV	M,D
+	INX	H
+	DCR	A
+	JM	LENUMZ
+	MOV	M,A
+	XTHL
+	CALL	PUTHLW
+	XCHG
+	MOV	A,E
+	ADI	001H
+	DAA
+	MOV	E,A
+	MOV	A,D
+	ACI	000H
+	DAA
+	MOV	D,A
+	MOV	A,C
+	ADI	04AH
+	MOV	C,A
+	MOV	A,B
+	ACI	000H
+	MOV	B,A
+LENUMS:	MOV	A,M
+	ORA	A
+	JZ	LENUMR
+	INX	H
+	CPI	00DH
+	JNZ	LENUMS
+	JMP	LENUMR
+LENUMZ:	POP	H
+	SHLD	INDEX9	;POINTS+56
+	JMP	CURSET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; DECIMAL INCREMENT/DECREMENT HL
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+DAADD:	PUSH	PSW
+	LXI	B,00001H
+	JNC	DAADD1
+	LXI	B,09999H
+DAADD1:	MOV	A,L
+	ADD	C
+	DAA
+	MOV	L,A
+	MOV	A,H
+	ADC	B
+	DAA
+	MOV	H,A
+	POP	PSW
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	BC - SCREEN POINTER
+;	HL - DISPLAYED WORD
+;;;;;;;;;;;;;;;;;;;;;;;;;
+PUTHLA:	CALL	PUTHEX
+PUTHLW:	MOV	A,H
+	CALL	PUTHEX
+	MOV	A,L
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	BC - SCREEN POINTER
+;;;;;;;;;;;;;;;;;;;;;;;;;
+PUTHEX:	CALL	PUTNBL
+PUTNBL:	RRC
+	RRC
+	RRC
+	RRC
+	PUSH	PSW
+	ANI	00FH
+	CPI	00AH
+	SBI	02FH
+	DAA
+	PUSH	H
+	LHLD	DIGITS
+	ANA	L
+	POP	H
+	STAX	B
+	INX	B
+	POP	PSW
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	ALIGN "X"
+;	INPUT:	E = Строковая позиция в строке
+;	OUTPUT:	E = Выровненная позиция (экранная)
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+ALIGNX:	LHLD	LINE
+	LDA	PANX	; Загружаем значение "панорамы" по ИКС
+	MOV	C,E	; Счётчик позиции будет в регистре C
+	INR	C
+	CMA		; Выполняем операцию NEG A
+	INR	A	; в две инструкции
+	MOV	B,M
+;	INR	A
+ALIGNE:	MOV	E,A	; Устанавливаем счётчик позиции
+	MVI	D,000H	; Обнуляем счётчик табуляции
+ALIGNI:	DCR	C	; Итеративный счётчик пропущенных символов
+	MOV	A,B	; Возвращаем прошлый символ
+	RZ		; Возвращаемся, если дошли до позиции
+	MOV	B,M	; Буферизация символа строки
+	MOV	A,B	; Подготовка к его анализу
+	DCR	D	; Счётчик оставшихся позиции в табуляции
+	ORA	A	; Достигли конца всего текста?
+	RZ		; Возвращаемся
+	INR	E	; Переход к следующей позиции
+	CPI	00DH	; Переход на новую строку?
+	RZ		; Возвращаемся
+	CPI	00AH	; Буферная зона?
+	RZ		; Возвращаемся
+	INX	H	; Указатель на следующий символ
+	CPI	009H	; Всё, что угодно, кроме символа табуляции
+	JNZ	ALIGNI	; продолжает цикл сканирования строки
+	MOV	A,D	; Сколько позиций осталось до табуляции?
+	ANI	007H	; Их число всегда меньше восьми
+	ADD	E	; Приращиваем к счётчику позиции
+	JMP	ALIGNE	; Запоминаем в регистре позиции и продолжаем
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	INSERT CHARACTER INTO BUFFER
+;;;;;;;;;;;;;;;;;;;;;;;;;
+INSERT:	PUSH	PSW
+	LHLD	LINE
+	LDA	CURX
+	MOV	C,A
+	LDA	PANX
+	DCR	A
+	ADD	C
+	JC	INSERD
+	DCR	A
+	MOV	C,A
+	PUSH	H
+	PUSH	B
+	CALL	EXPAND
+	POP	B
+	POP	H
+	LXI	D,000FEH
+	XCHG
+	DAD	D
+	MOV	A,M
+	CPI	00AH
+	JNZ	INSERD
+	XCHG
+	LDA	CURX
+	MOV C,A
+	MOV E,C
+	CALL NORMAX
+;	MVI	B,000H
+;	DAD	B
+	POP	B
+INSERC:	MOV	A,M
+	CPI	00DH
+	RZ
+	MOV	M,B
+	CPI	00AH
+	RZ
+	MOV	B,A
+	ORA	A
+	RZ
+	INX	H
+	JMP	INSERC
+INSERD:	POP	PSW
+	RET
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	GET ADDRESS OF LINE BY Y POSITION
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+LINEBY:	LDA	CURY
+	ANI	01FH
+	MOV	H,A
+	ADI	0E7H
+	SBB	A
+	ANI	0F7H
+	ADD	H
+	MOV	C,A
+	MVI	B,000H
+	LXI	H,LINE01
+	DAD	B
+	DAD	B
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	RENUMBERING THE LINES
+;;;;;;;;;;;;;;;;;;;;;;;;;
+RENUM:	JNC	RENUM5
+	LHLD	INDEX0
+	MOV	A,H
+	ORA	L
+	RZ
+	LHLD	LINE01	;POINTS+2
+	XCHG
+	LHLD	LINE00	;POINTS
+	DCX	D
+	LDAX	D
+	ORA	A
+	RZ
+	INX	D
+	MOV	A,D
+	CMP	H
+	JNZ	RENUM0
+	MOV	A,E
+	CMP	L
+	RZ
+RENUM0:	DCX	H
+	MOV	A,M
+	ORA	A
+	JZ	RENUM2
+RENUM1:	DCX	H
+	MOV	A,M
+	ORA	A
+	JZ	RENUM2
+	CPI	00DH
+	JNZ	RENUM1
+RENUM2:	INX	H
+	XCHG
+	LXI	H,00000H
+	DAD	SP
+	XCHG
+	LXI	SP,LINE00	;POINTS
+	MVI	A,01AH
+RENUM3:	XTHL
+	INX	SP
+	INX	SP
+	SUI	001H
+	JP	RENUM3
+	XCHG
+	SPHL
+	LHLD	INDEX
+	DCX	H
+	JMP	RENUM9
+RENUM5:	LHLD	LINE26	;POINTS+52
+	MOV	A,M
+	ORA	A
+	RZ
+	XCHG
+	LXI	H,00000H
+	DAD	SP
+	LXI	SP,LINE26	;POINTS+52
+RENUM6:	LDAX	D
+	ORA	A
+	JZ	RENUM7
+	INX	D
+	CPI	00DH
+	JNZ	RENUM6
+RENUM7:	XCHG
+	MVI	A,01AH
+RENUM8:	XTHL
+	DCX	SP
+	DCX	SP
+	DCR	A
+	JP	RENUM8
+	XCHG
+	SPHL
+	LHLD	INDEX
+	INX	H
+RENUM9:	SHLD	INDEX
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	MAKE LINE EDITED
+;	INPUT: HL-BUFFER
+;;;;;;;;;;;;;;;;;;;;;;;;;
+EXPAND:	LDA	FLAGS
+	XRI	080H
+	RP
+	STA	FLAGS
+	LHLD	LINE
+	LXI	B,00000H
+	LXI	D,00000H
+	DCX	H
+EXPAN1:	DCR	C
+	INX	H
+	MOV	A,M
+	ORA	A
+	JZ	LENUM
+	CPI	00AH
+	RZ
+	CPI	00DH
+	JNZ	EXPAN1
+EXPAN2:	INX	D
+	INX	H
+	MOV	A,M
+	ORA	A
+	JNZ	EXPAN2
+	PUSH	B
+	PUSH	H
+	DAD	B
+	XTHL
+	POP	B
+EXPAN3:	MOV	A,M
+	DCX	H
+	STAX	B
+	DCX	B
+	DCX	D
+	MOV	A,D
+	ORA	E
+	JNZ	EXPAN3
+	POP	B
+EXPAN4:	MVI	M,00AH
+	INX	H
+	DCR	C
+	JNZ	EXPAN4
+	MVI	M,00DH
+	JMP	LENUM
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;       NORMALIZE "X"
+;       INPUT:  E = Невыровненная позиция в строке (экранная)
+;       OUTPUT: E = Выровненная позиция (строковая)
+;               A = Последний символ по позиции
+;               CF = Ошибка переполнения указателя позиции
+;;;;;;;;;;;;;;;;;;;;;;;;;
+NORMAX:	LHLD	LINE
+NORMAZ:	LDA	PANX	; Загружаем значение "панорамы" по ИКС
+	ADD	E	; и складываем с позицией каретки
+	MVI	E,0FFH	; В начале - -1 символ
+	RZ		; Возвращаемся, если панорама не установлена
+	RC		; Возвращаемся, если позиционное переполнение
+	MOV	B,M	; Считываем символ в буферный регистр
+	MOV	D,A	; Панорамная прокрутка - в D
+	INR	E
+NORMAN:	MVI	C,000H	; Обнуляем счётчик табуляции
+NORMAR:	MOV	A,B	; Возвращаем предыдущий символ из буфера
+NORMAL:	ORA	A	; Сбрасываем признак переполнения
+	INR	E	; Инкремент счётчика позиций
+	INR	C	; Инкремент счётчика табуляции
+	DCR	D	; Счётчик "проглоченных" прокруткой символов
+	MOV	A,M	; Считываем символ строки
+	JZ	NORMED	; Возвращаемся, если перешли к искомому
+	ORA	A	; Строка - последняя в тексте и оборвалась?
+	RZ		; Возвращаемся
+	CPI	00DH	; Строка завершилась переходом на новую строку?
+	RZ		; Возвращаемся
+	CPI	00AH	; Строка завершилась переходом буферной зоной?
+	RZ		; Возвращаемся
+	INX	H	; Переходим к очередному символу
+	CPI	009H	; Всё, что угодно, кроме символа табуляции
+	MOV	B,A	; Запоминаем символ табуляции в буфере
+	JNZ	NORMAL	; продолжает цикл сканирования строки
+	MOV	A,C	; Счётчик экранной позиции в табуляции
+	ANI	007H	; всегда кратен восьми. Кратен ли сейчас?
+	JZ	NORMAR	; Игнорируем пропуск знакомест, если да
+	ORI	0F8H	; Иначе, дополняем величину до отрицательной
+	ADD	D	; Корректируем позицию панорамы
+	MOV	D,A	; Сохраняем в счётчике
+	MOV	A,B	; Иначе, символ табуляции необходимо вернуть
+	JZ	NORMED	; Возвращаемся, если попало на последнюю позицию
+	JC	NORMAN	; Перенос указывает, что и эта табуляция скрыта
+NORMED:	ORA	A	; Снимаем произнак "ошибки" - флаг ZF
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	TEST FOR CALLBACK EXISTING
+;	AND CALL IT
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+CALLER:	LHLD	BUDDY
+	MOV A,H
+	ORA L
+	RZ
+	PUSH	H
+CALLIT:	XTHL
+	LHLD	CURX	; HL = YX
+	XCHG		; DE = YX
+	LHLD	TEXT	; HL = STRING
+	PUSH	H	; <STRING>
+	LHLD	INDEX	; HL = ROW
+	MOV	C,D	; C = Y
+	MVI	B,000H
+	DAD	B	; HL = ROW[Y]
+	PUSH	H
+	CALL	NORMAX
+	LHLD	FLAGS
+	MOV	H,E
+	PUSH	H
+	POP	PSW
+	POP	B
+	POP	D
+	LHLD	LINE
+	RNZ
+	PUSH	PSW
+	MVI	A,0FFH
+	STA	PRSKEY
+	POP	PSW
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+; PAD:	HOME KEY
+PADHOM:	CALL	FLAG1S
+	PUSH	D
+	CALL	SHRINK
+	POP	D
+	XRA	A
+	STA	CURX
+	MOV	A,E
+	ORA	A
+	RNZ
+	LDA	PANX
+	dcr a;	CPI	001H
+	JNZ	PADHO1
+	;XRA	A
+	STA	CURY
+	DCR	D
+	RP
+	LHLD	LINEBK
+	JMP	LENEW
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+PADDY:	SHLD	BUDDY
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+PAD:	LHLD	SHEET
+	MOV	A,L
+	ORA	H
+	LXI	SP,076D0H
+	LXI	H,00101H
+	SHLD	FLAGS
+	;LXI	H,EDITHI+1
+PADKEJ:	;JNZ	PADKEY
+	;CALL	STROUT
+	CZ	DIRECX
+	LHLD	SHEET
+	SHLD	TEXT
+; PAD:	PROCESS THE KEY
+PADKEY:	LXI	H,PADKEY;J+1
+	PUSH	H
+	CALL	CURSET
+	CALL	TERMIN
+	CPI	008H
+	JZ	PADLFT
+	CPI	009H
+	JZ	PADASC
+	CPI	00AH
+	JZ	PADDEL
+	CPI	00CH
+	JZ	PADHOM
+	CPI	00DH
+	JZ	PADRET
+	CPI	018H
+	JZ	PADRGT
+	CPI	019H
+	JZ	PADUP
+	CPI	01AH
+	JZ	PADOWN
+	CPI	01FH
+	JZ	PADEND
+	CPI	07FH
+	JZ	PADBCK
+	CPI	020H
+	JC	CALLKY
+; PAD:	INSERT ASCII INTO TEXT
+PADASC:	PUSH	D
+	CALL	INSERT
+	POP	D
+; PAD:	ARROW TO RIGHT
+PADRGT:	CALL	NORMAX
+	ORA	A
+	RZ
+	CALL	ALIGNX
+	CPI	00AH
+	JZ	PADNXT
+	CPI	00DH
+	JZ	PADNXT
+	CPI	009H
+	MOV	A,E
+	JZ	PADRGB
+	CPI	03FH
+	JNC	TXTPAN
+PADRGH:	LDA	PANX
+	STC
+	ADC	E
+	LHLD	PANX
+	SUB	L
+	STA	CURX
+	RET
+; PAD:	ARROW TO LEFT
+PADLFT:	LDA	PANX
+	DCR	A
+	ORA	E
+	JZ	PADLEN
+	DCR	E
+	PUSH	D
+	JM	PADLEF
+	CALL	NORMAX
+	MOV	A,B
+	CPI	009H
+	JZ	PADLET
+	CALL	ALIGNX
+	MOV	A,E
+	POP	D
+	MOV	E,A
+	JMP	PADCUR
+; PAD:	LEFT EXTEND
+PADLEE:	CALL	FLAG1S
+	XTHL
+	INR	L
+	XTHL
+; PAD:	LEFT TESTING
+PADLET:	DCR	E
+	CALL	ALIGNX
+	MOV	A,E
+	POP	D
+	CMP	E
+	MOV	E,A
+	INR	E
+	JC	PADCUR
+	LDA	PANX
+	ADD	E
+	STA	PANX
+	MVI	E,000H
+	JMP	PADCUR
+; PAD:	LEFT CORNER FORCE
+PADLEF:	INR	E
+	CALL	NORMAX
+	DCR	E
+;	DCX H
+;	MOV A,M
+	MOV	A,B
+	CPI	009H
+	JZ	PADLEE
+	STC
+	CALL	TXTPAN
+	POP	D
+	RZ
+	LHLD	INDEX0
+	MOV	A,H
+	ORA	L
+	ORA	D
+	RZ
+PADLEN:	CALL	PADUP
+	CALL	CURSET
+	CALL	LENUM
+	PUSH	D
+	JMP	PADEN3
+; PAD:	END KEY
+PADEND:	PUSH	D
+	PUSH	D
+	CALL	SHRINK
+	POP	D
+	LDA	PANX
+	ADD	E
+	MOV	E,A
+	CALL	ALIGNX
+	MOV	A,M
+	CPI	00DH
+	JZ	PADEN2
+PADEN3:	MVI	A,001H
+	STA	PANX
+	MVI	E,0FFH
+	CALL	ALIGNX
+	INR	E
+	MOV	A,E
+	SUI	040H
+	JNC	PADEN1
+	XRA	A
+PADEN1:	INR	A
+	STA	PANX
+	MOV	D,A
+	MOV	A,E
+	SUB	D
+	STA	CURX
+	CMP	E
+PADEN2:	POP	D
+	PUSH	PSW
+	CALL	FLAG1S
+	POP	PSW
+	RNZ
+	MVI	A,001H
+	STA	PANX
+	MOV	A,D
+	LXI	H,0183FH
+	SHLD	CURX
+	CMP	H
+	RNZ
+	LHLD	LINE26
+	MOV	A,M
+	ORA	A
+	JZ	LENUM
+	JMP	LENEW
+;	MVI	B,019H
+;PADHO3:	PUSH	B
+;	CALL	TXTBCK
+;	POP	B
+;	DCR	B
+;	JNZ	PADHO3
+;	RET
+PADHO1:	sui 040h;CPI	040H
+	JNC	PADHO2
+	xra a;MVI	A,040H
+PADHO2:	inr a
+	STA	PANX
+	RET
+; PAD: NEXT PAGE LINE
+PADNXT:	LHLD	CURX
+	XCHG
+	XRA	A
+	MOV	E,A
+	STA	CURX
+	INR	A
+	STA	PANX
+; PAD:	ARROW TO DOWN
+PADOWN:	PUSH	D
+	CALL	SHRINK
+	POP	D
+	INR	D
+	MOV	A,D
+	CPI	019H
+	JC	PADCUR
+	JMP	TXTSCR
+; PAD:	BACKSPACE KEY
+PADBCK:	CALL	PADLFT
+; PAD:	DELETE KEY
+PADDEL:	CALL	EXPAND
+	LHLD	LINE
+	LDA	CURX
+	MOV	E,A
+	CALL	NORMAX
+	MOV	E,L
+	MOV	D,H
+	LDAX	D
+	CPI	00AH
+	JZ	PADDRE
+; PAD:	DELETE KEY FOR MERGE TWO LINES
+PADDEM:	INX	D
+	LDAX	D
+	CPI	00DH
+	RZ
+	MOV	M,A
+	INX	H
+	CPI	00AH
+	JNZ	PADDEM
+	RET
+; MERGE TWO LINES
+PADDRE:	INX	H
+	CMP	M
+	JZ	PADDRE
+PADDRJ:	INX	H
+	MOV	A,M
+	STAX	D
+	INX	D
+	ORA	A
+	JNZ	PADDRJ
+	LDA	FLAGS
+	ANI	07EH
+	INR	A
+	STA	FLAGS
+	JMP	LENUM
+; PAD:	RETURN KEY FOR NEW LINE
+PADRET:	PUSH	D
+	CALL	SHRINK
+	LDA	CURX
+	MOV	E,A
+	PUSH	PSW
+;	LHLD	LINE01
+;	SHLD	TEXT
+	XRA	A
+	STA	CURX
+	POP	PSW
+	LHLD	LINE
+	CALL	NORMAX
+	MVI	C,00DH
+PADRE1:	MOV	A,M
+	MOV	M,C
+	MOV	C,A
+	INX	H
+	ORA	A
+	JNZ	PADRE1
+	MOV	M,A
+;	CALL	FLAG1S
+	POP	D
+	XRA	A
+	MOV	E,A
+	INR	A
+	STA	PANX
+	CALL	PADOWN
+	CALL	LENUM
+;	STC
+;	JMP	LIST
+;;;;;;;;;;;;;;;;;;;;;;;;;
+FLAG1S:	LDA	FLAGS
+	ORI	001H
+	STA	FLAGS
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	TEXT HORIZONTAL SCROLLING
+;	CF=0 - BACK
+;	CF=1 - FORWARD
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+TXTPN9:	POP	PSW
+	MVI	A,000H
+	DCR	A
+	RET
+PADRGB:	SUI	03FH
+	JC	PADRGH
+	CALL	FLAG1S
+	LDA	PANX
+	MOV	C,A
+	LHLD	CURX
+	ADD	L
+	CMA
+	ANI	007H
+	CPI	007H
+	JZ	TXTPAN
+	ADD	C
+	INR	A
+	STA	PANX
+;	JMP	TXTPAN
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+TXTPAN:	PUSH	PSW
+	CALL	PUSHXY
+	DB	7,3
+	MVI	E,000H
+	JC	TXTPN0
+	POP	B
+	CALL	PUSHXY
+	DB	72,3
+	MVI	E,03FH
+TXTPN0:	POP	B
+	SBB	A
+	STC
+	ADC	A
+	LHLD	PANX
+	ADD	L
+	JZ	TXTPN9
+	STA	PANX
+	MVI	D,019H
+	LXI	H,LINE01	;POINTS+2
+TXTPN1:	PUSH	D
+	PUSH	B
+;	LDA	CURX
+;	CPI	03FH
+;	CZ	KEYCHK
+	MOV	A,M
+	INX	H
+	PUSH	H
+	MOV	H,M
+	MOV	L,A
+	CALL	NORMAZ
+	POP	D
+	INX	D
+	JNC	TXTPN2
+	LDA	OVRPAN
+TXTPN2:	CPI	009H
+	JNZ	TXTPN3
+	LDA	TABULS
+TXTPN3:	POP	H
+	MOV	M,A
+	LXI	B,0004EH
+	DAD	B
+	MOV	B,H
+	MOV	C,L
+	XCHG
+	POP	D
+	DCR	D
+	JNZ	TXTPN1
+	POP	PSW
+	CMC
+;	JMP	PANING
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	HORIZONTAL SCROLLING
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	DB	'PANING'
+PANING:	;LHLD	TOPROW
+	;INX	H
+	CALL PUSHXY
+	DB 7,3
+	POP H
+	MVI	E,00DH
+	JNC	PANINE
+	CALL PUSHXY
+	DB 72,3
+	POP H
+	MVI	E,08FH
+PANINE:	MVI	C,019H
+PANINY:	PUSH	PSW
+	MVI	D,00DH
+	MVI	A,000H
+	JC	PANINL
+PANINR:	MOV	B,M
+	MOV	M,A
+	INX	H
+	MOV	A,M
+	MOV	M,B
+	INX	H
+	MOV	B,M
+	MOV	M,A
+	INX	H
+	MOV	A,M
+	MOV	M,B
+	INX	H
+	MOV	B,M
+	MOV	M,A
+	MOV	A,B
+	INX	H
+	DCR	D
+	JNZ	PANINR
+	JMP	PANINA
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	VERTICAL SCROLLING 64X25
+;	CF=0 - DOWN
+;	CF=1 - UP
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;	DB	'SCROLLING'
+SCROLL:	LXI	H,00000H
+	CMC
+	SBB	A
+	STA	TMPA
+	DAD	SP
+	SHLD	TMP
+	LXI	H,77BAH
+	JZ	SCROLX
+	LXI	H,7F56H
+SCROLX:	LDA	TMPA	; 13
+	MOV	B,A	;  5
+	LXI	D,00000H; 10+
+	XRI	04EH	;  7
+	SUB	B	;  4
+	MOV	C,A	;  5
+	MVI	A,05H	;  7
+SCROLY:	SPHL		;  5
+	XCHG		;  4
+	XTHL		; 18
+	XCHG		;  4
+	DAD	B	; 10 = 41
+	SPHL
+	XCHG
+	XTHL
+	XCHG
+	DAD	B
+	SPHL
+	XCHG
+	XTHL
+	XCHG
+	DAD	B
+	SPHL
+	XCHG
+	XTHL
+	XCHG
+	DAD	B
+	SPHL
+	XCHG
+	XTHL
+	XCHG
+	DAD	B
+	DCR	A	;  5
+	JNZ	SCROLY	; 10 = 220
+	LDA	TMPA	; 13
+	MOV	B,A	;  5
+	XRI	064H	;  7
+	SUB	B	;  4
+	MOV	C,A	;  5
+	MOV	A,B	;  5
+	XRI	0F8H	;  7
+	MOV	B,A	;  5
+	DAD	B	; 10
+	MOV	A,L	;  5
+;	CPI	008H	;  7
+;	JZ	SCROFF	; 10
+	CPI	008H	;  7
+	JNZ	SCROLX	; 10 = 136+220 = 356
+SCROFF:	DAD	B
+	LHLD	TMP
+	SPHL
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+PANINL:	MOV	B,M
+	MOV	M,A
+	DCX	H
+	MOV	A,M
+	MOV	M,B
+	DCX	H
+	MOV	B,M
+	MOV	M,A
+	DCX	H
+	MOV	A,M
+	MOV	M,B
+	DCX	H
+	MOV	B,M
+	MOV	M,A
+	MOV	A,B
+	DCX	H
+	DCR	D
+	JNZ	PANINL
+PANINA:	DAD	D
+	POP	PSW
+	DCR	C
+	JNZ	PANINY
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+EDITHI:	DB	'POBEDIT V1.00',0	; V2023.0426',0
+PADADR	DW	PAD
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+	ORG	0000H
+START:	JMP	PADINI
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;TOPIDX	DW	077BCH
+;TOPROW	DW	077C0H
+;TOPRGT	DW	07802H
+;BTNIDX	DW	07F0CH
+;BTNROW	DW	07F10H
+;BTNRGT	DW	07F52H
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+PEEKHL	EQU	07FFEH
+PEEKDE	EQU	07FFCH
+PEEKBC	EQU	07FFAH
+PEEKAF	EQU	07FF8H
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+	ORG	00800H
+PADINI:	LXI	SP,076D0H
+	LXI	H,00000H
+	SHLD	SIDEL
+	XRA	A
+	STA	TABULS
+	LXI	H,000FFH
+	SHLD	DIGITS
+	MVI	A,0CFH
+	STA	OVRPAN
+	LXI	H,PROGR2
+	SHLD	07FF4H
+	LXI	H,PROGR3
+	SHLD	07FF6H
+	LXI	H,PAD
+	PUSH	H
+	LXI	H,PROGR1
+	CALL	PLESET
+	LXI	H,PADHNT
+	CALL	STROUT
+	LXI	H,PADRUN
+	PUSH	H
+PADASK:	CALL	GETKEY
+	LXI	H,DEBUG
+	CPI	00DH
+	RZ
+	CPI	044H
+	RZ
+	CPI	059H
+	RZ
+	CPI	064H
+	RZ
+	CPI	079H
+	RZ
+	CPI	020H
+PADRUN:	LXI	H,00000H
+	RZ
+	CPI	04EH
+	RZ
+	CPI	06EH
+	RZ
+	LXI	H,LISTAB+1
+	MVI	C,01CH
+	CPI	009H
+	JNZ	PADASK
+STYLED:	MOV	A,M
+	XRA	C
+	MOV	M,A
+	XRA	A
+	JMP	PADRUN
+
+DEBUG:	;JNZ	DEBUG0
+	;MVI	C,01FH
+	;JMP	0F809H
+DEBUG0:	XTHL
+	SHLD	TMP
+	XTHL
+	PUSH	PSW
+	PUSH	H
+	PUSH	D
+	PUSH	B
+	PUSH	PSW
+	PUSH	H
+	PUSH	D
+	PUSH	B
+;	LXI	H,0780AH
+;	MVI	M,07FH
+;	LXI	H,0781AH
+;	MVI	M,07FH
+	LXI	D,076D7H
+	POP	H
+	SHLD	PEEKBC
+	CALL	DBGDMP
+	CALL	DBGMSG
+	DB	' BC:',0
+	CALL	DBGHLW
+	POP	H
+	SHLD	PEEKDE
+	CALL	DBGDMP
+	CALL	DBGMSG
+	DB	' DE:',0
+	CALL	DBGHLW
+	POP	H
+	SHLD	PEEKHL
+	CALL	DBGDMP
+	CALL	DBGMSG
+	DB	' HL:',0
+	SHLD	07FFEH
+	CALL	DBGHLW
+	POP	H
+	SHLD	PEEKAF
+	PUSH	H
+	MOV	A,L
+	CALL	DBGFLG
+	CALL	DBGMSG
+	DB	' AF:',0
+	MOV	C,H
+	CALL	DBGHLW
+	LXI	H,00008H
+	DAD	SP
+	CALL	DBGMSG
+	DB	' SP:',0
+	CALL	DBGDMS
+	CALL	DBGHLW
+	POP	PSW
+	JM	DBGSUB
+	JPE	DBGDBL
+	JZ	DBGKEY
+	JC	DBGCLK
+	CALL	DBGMSG
+	DB	32,32,32,32,32,32,32,32,32,32,32,0
+DBGAUS:	POP	B
+	POP	D
+	POP	H
+	POP	PSW
+	RET
+DBGAR2:	LXI	H,TABULS
+	MVI	C,01CH
+	CALL	USRSTL
+	CALL	DBGMSG
+	DB	' navata ar2',0
+	JMP	DBGAUS
+DBGKEY:	CALL	0F803H
+	CPI	01BH
+	JZ	DBGAR2
+	PUSH	PSW
+	CALL	DBGMSG
+	DB	' klawi{a ^',0
+	POP	PSW
+	XCHG
+	ORI	040H
+	MOV	M,A
+	CPI	044H
+	JNC	DBGKEJ
+	DCX	H
+	MVI	M,046H
+	INX	H
+	SUI	00FH
+	MOV	M,A
+	INX	H
+	ADI	00FH
+DBGKEJ:	LXI	H,DBGAUS
+	PUSH	H
+	CPI	045H
+	JZ	TXTPAN
+	CPI	04BH
+	STC
+	JZ	TXTSCR
+	CPI	055H
+	STC
+	JZ	TXTPAN
+	CPI	057H
+	JZ	PANVER
+	CPI	040H
+	JZ	TXTSWP
+	LXI	H,DIGITS
+	MVI	C,07FH
+	CPI	041H
+	JZ	USRSTL
+	LXI	H,SIDEL
+	CPI	042H
+	JZ	USRSTY
+	LXI	H,SIDER
+	CPI	043H
+	JZ	USRSTY
+	CPI	044H
+	RNZ
+	LHLD	PEEKHL
+USERD:	MOV	A,M
+	ORA	A
+	JZ	USERD1
+	INX	H
+	CPI	00DH
+	JNZ	USERD
+USERD1:	XCHG
+	LHLD	PEEKHL
+USERD2:	LDAX	D
+	MOV	M,A
+	INX	D
+	INX	H
+	ORA	A
+	JNZ	USERD2
+	RET
+USRSTY:	MVI	C,01BH
+USRSTL:	MOV	A,M
+	XRA	C
+	MOV	M,A
+	RET
+TXTSWP:	LHLD	07FF4H
+	PUSH	H
+	LHLD	07FF6H
+	SHLD	07FF4H
+	LHLD	PEEKDE
+	SHLD	07FF6H
+	POP	H
+	MVI	C,01FH
+	CALL	PUTC
+	JMP	PLENEW
+DBGDBL:	CALL	DBGMSG
+	DB	' dwa klika ',0
+	JMP	DBGAUS
+DBGCLK:	CALL	DBGMSG
+	DB	' prorisowka',32,0
+	POP B
+	POP D
+	POP H
+	POP PSW
+	JMP DBGHL
+	JMP	DBGAUS
+DBGSUB:	CALL	DBGMSG
+	DB	' SUB-BUFFER',0
+	JMP	DBGAUS
+DBGHL:	PUSH	H
+	LXI	D,07FA8H
+	LHLD	PEEKBC
+	CALL	DBGHLW
+	MVI	A,023H
+	INX	D
+	INX	D
+	STAX	D
+	INX	D
+	PUSH	D
+	MVI	A,008H
+	LXI	D,07FD0H
+DBGHLT:	PUSH	PSW
+	PUSH	H
+	PUSH	D
+	MOV	L,A
+;	CALL	EDITNX+3
+;	CALL EDITXN
+	MOV	A,E
+	ANI	007H
+	ADI	030H
+	POP	D
+	POP	H
+	STAX	D
+	INX	D
+	POP	PSW
+	INR	A
+	CPI	65
+;	JC	DBGHLT
+;	CALL	EDITNX
+	MOV	A,E
+	POP	D
+	LDA	PEEKAF+1
+	CALL	DBGHLA
+	INX	D
+	CALL	DBGMSG
+	DB	'kod tokena:',0
+	LHLD	PEEKHL
+	LDA	PEEKAF+1
+	ADD	L
+	MOV	L,A
+	MOV	A,H
+	ACI	0
+	MOV	H,A
+	DCX	H
+	PUSH	H
+	PUSH	D
+	XCHG
+	CALL	VAL27
+	POP	D
+	PUSH	PSW
+	CALL	DBGHLX
+	INX	D
+	CALL	DBGMSG
+	DB	'indeks tokena:',0
+	POP	PSW
+	PUSH	D
+	CALL	TOKFND
+	POP	D
+	CALL	DBGHLA
+	POP	H
+	INX	D
+	CALL	DBGMSG
+	DB	'celoe:',0
+	PUSH	H
+	PUSH	D
+	XCHG
+	CALL	DECIN
+	POP	D
+	CALL	DBGHLX
+	POP	H
+	CALL	DBGMSG
+	DB	'/drobx:',0
+	PUSH	D
+	XCHG
+	CALL	FRACIN
+	POP	D
+	CALL	DBGHLX
+	POP	D
+	RET
+DBGFLG:	PUSH	D
+	PUSH	H
+	PUSH	B
+	XCHG
+	LXI	B,0004FH
+	DAD	B
+	ADD	A
+	MVI	M,053H
+	JC	DBGFL1
+	MVI	M,02DH
+DBGFL1:	INX	H
+	INX	H
+	ADD	A
+	MVI	M,05AH
+	JC	DBGFL2
+	MVI	M,02DH
+DBGFL2:	INX	H
+	INX	H
+	ADD	A
+	ADD	A
+	ADD	A
+	ADD	A
+	MVI	M,050H
+	JC	DBGFL3
+	MVI	M,02DH
+DBGFL3:	INX	H
+	INX	H
+	ADD	A
+	ADD	A
+	MVI	M,043H
+	JC	DBGFL4
+	MVI	M,02DH
+DBGFL4:	INX	H
+	INX	H
+	POP	B
+	POP	H
+	POP	D
+	RET
+DBGDMP:	PUSH	D
+	PUSH	H
+	PUSH	B
+	XCHG
+	LXI	B,0004FH
+	DAD	B
+	MVI	B,007H
+DBGDMB:	LDAX	D
+	INX	D
+	ORA	A
+	JM	DBGDMC
+	CPI	020H
+	JNC	DBGDMC+2
+DBGDMC:	MVI	A,02EH
+	MOV	M,A
+	INX	H
+	DCR	B
+	JNZ	DBGDMB
+	POP	B
+	POP	H
+	POP	D
+	RET
+DBGDMS:	PUSH	D
+	PUSH	H
+	PUSH	B
+	XCHG
+	LXI	B,0004EH
+	DAD	B
+	XCHG
+	MOV	B,H
+	MOV	C,L
+	MVI	A,006H
+DBGDMT:	PUSH	PSW
+	LDAX	B
+	INX	B
+	MOV	L,A
+	LDAX	B
+	INX	B
+	MOV	H,A
+	CALL	DBGHLW
+	INX	D
+	POP	PSW
+	DCR	A
+	JNZ	DBGDMT
+	POP	B
+	POP	H
+	POP	D
+	RET
+DBGHLX:	CALL	DBGHLA
+DBGHLW:	MOV	A,H
+	CALL	DBGHLA
+	MOV	A,L
+DBGHLA:	PUSH	PSW
+	RRC
+	RRC
+	RRC
+	RRC
+	CALL	DBGHL1
+	POP	PSW
+DBGHL1:	ANI	00FH
+	CPI	00AH
+	SBI	02FH
+	DAA
+	STAX	D
+	INX	D
+	RET
+DBGMSG:	XTHL
+	MOV	A,M
+	INX	H
+	XTHL
+	ORA	A
+	RM
+	RZ
+	STAX	D
+	INX	D
+	JMP	DBGMSG
+;;;;;;;;;;;;;;;;;;;;;;;
+;	AHL = VAL(DE:/-?[0-9]*/)
+;;;;;;;;;;;;;;;;;;;;;;;
+DECIN:	LXI	H,00000H
+	MVI	B,000H
+	LDAX	D
+	CPI	02DH
+	PUSH	PSW
+	JNZ	DECIN1
+	INX	D
+DECIN1:	LDAX	D
+	CPI	03AH
+	JNC	DECIN9
+	SUI	030H
+	JC	DECIN9
+	INX	D
+	MOV	C,A
+DECIN2:	MOV	A,B
+	PUSH	D
+	MOV	E,C
+	CALL	MUL10
+	XCHG
+	MOV	B,E
+	MOV	A,D
+	POP	D
+	ORA	A
+	JNZ	DECIN9;WARMON
+	JMP	DECIN1
+DECIN9:	POP	PSW
+	MOV	A,B
+	RNZ
+;;;;;;;;;;;;;;;;;;;;;;;
+;	AHL = -AHL
+;;;;;;;;;;;;;;;;;;;;;;;
+NEG24:	PUSH	B
+	MOV	B,A
+	MOV	A,L
+	CMA
+	ADI	001H
+	MOV	L,A
+	MOV	A,H
+	CMA
+	ACI	000H
+	MOV	H,A
+	MOV	A,B
+	CMA
+	ACI	000H
+	POP	B
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;
+;	AHL = FRAC(DE:/[0-9]*/)
+;;;;;;;;;;;;;;;;;;;;;;;
+FRACIN:	MOV	B,D
+	MOV	C,E
+	LXI	H,0H
+	LXI	D,0H
+;	DCX	B
+	DCX	B
+FRACI0:	INX	B
+	LDAX	B
+	CPI	030H
+	JMP	FRACIA
+	CPI	03AH
+	JC	FRACI0
+FRACIA:	DCX	B
+	LDAX	B
+	SUI	030H
+	MOV	D,A
+	MOV	A,E
+	RC
+	MOV	A,D
+	CPI	00AH
+	MOV	A,E
+	RNC
+	PUSH	B
+	CALL	DIW10
+	MOV	E,A
+	POP	B
+	JMP	FRACIA
+;;;;;;;;;;;;;;;;;;;;;;;
+;	HLDE = AHL * 10 + E
+;;;;;;;;;;;;;;;;;;;;;;;
+MUL10:	PUSH	PSW	;  11
+	XRA	A	;  4
+	MOV	D,A	;  5
+	MOV	B,H	;  5
+	MOV	C,L	;  5
+	DAD	H	; 11
+	ADC	A	;  4	AHL x= 2
+	DAD	H	; 11
+	ADC	A	;  4	AHL x= 4
+	DAD	B	; 11
+	ADC	D	;  7	AHL x= 5
+	DAD	H	; 11
+	ADC	A	;  4	AHL *= 10
+	DAD	D	; 11
+	ADC	D	;  4	AHL += E
+	XCHG		;  4	ADE = HL * 10 + E
+	POP	H	; 10
+	MOV	L,H	;  5
+	MVI	H,000H	;  7
+	MOV	B,H	;  5
+	MOV	C,L	;  5
+	DAD	H	; 11
+	DAD	H	; 11
+	DAD	B	; 11
+	DAD	H	; 11
+	MOV	C,A	;  5
+	MVI	B,000H	;  7
+	DAD	B	; 11 = 208
+	RET		; 10 = 218
+;;;;;;;;;;;;;;;;;;;;;;;
+;	AHL = AHL * 27 + E
+;;;;;;;;;;;;;;;;;;;;;;;
+MUL27:	MOV	B,H	;  5
+	MOV	C,L	;  5
+	MOV	D,A	;  5
+	DAD	H	; 11
+	ADC	A	;  4
+	DAD	B	; 11
+	ADC	D	;  4
+	MOV	B,H	;  5
+	MOV	C,L	;  5
+	MOV	D,A	;  5
+	DAD	H	; 11
+	ADC	A	;  4
+	DAD	H	; 11
+	ADC	A	;  4
+	DAD	H	; 11
+	ADC	A	;  4
+	DAD	B	; 11
+	ADC	D	;  4
+	MVI	D,000H	;  7
+	DAD	D	; 11 = 138
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;;;
+;	AHL = DEHL / 10
+;;;;;;;;;;;;;;;;;;;;;;;;;
+DIW10:	LXI	B,00000H
+	PUSH	B
+	MVI	B,25
+	PUSH	B
+DIW101:	POP	B
+	DCR	B
+	JM	DIW104
+	MOV	A,C
+	XTHL
+	DAD	H
+	XTHL
+	ADC	C
+	MOV	C,A
+	PUSH	B
+	MOV	A,D
+	SUI	00AH
+	JC	DIW102
+	MOV	D,A
+	INX	SP
+	INX	SP
+	POP	B
+	INR	C
+	PUSH	B
+	DCX	SP
+	DCX	SP
+DIW102:	XRA	A
+	XCHG
+	DAD	H
+	XCHG
+	DAD	H
+	ADC	E
+	MOV	E,A
+	ORA	D
+	ORA	H
+	ORA	L
+	JNZ	DIW101
+DIW103:	POP	B
+DIW104:	POP	H
+	MOV	A,C
+	RM
+DIW105:	DCR	B
+	RM
+	DAD	H
+	ADC	A
+	JMP	DIW105
+;;;;;;;;;;;;;;;;;;;;;;
+;	AHL = Signed mantissa
+;	DE = Buffer
+;;;;;;;;;;;;;;;;;;;;;;
+STR27:	STA	SAVEA
+	SHLD	SAVEHL
+	XCHG
+	SHLD	TMP
+	LXI	H,00000H
+	PUSH	H
+	LXI	H,0FFFFH
+	MOV	A,H		; AHL = -27
+STR27B:	MVI	E,000H
+	CALL	MUL27		; AHL *= 27
+	PUSH	PSW
+	XCHG
+	LHLD	SAVEHL
+	DAD	D
+	XCHG
+	MOV	E,A
+	LDA	SAVEA
+	POP	B
+	ADC	B
+	MOV	A,E
+	PUSH	PSW
+	PUSH	H		; [...A..HL]
+	JC	STR27B		; AHL < NUMBER
+	POP	PSW
+	POP	H
+	LHLD	SAVEHL
+	LDA	SAVEA
+STR27C:	POP	D
+	INR	E
+	DCR	E
+	JZ	STR27E
+	POP	B
+	MVI	C,03FH
+	PUSH	H
+	PUSH	PSW
+STR27D:	INX	SP
+	INX	SP
+	INX	SP
+	INX	SP
+	INR	C
+	PUSH	H
+	PUSH	PSW
+	DAD	D
+	ADC	B
+	JC	STR27D
+	LHLD	TMP
+	MOV	M,C
+	INX	H
+	SHLD	TMP
+	POP	PSW
+	POP	H
+	JMP	STR27C
+STR27E:	MVI	A,040H
+	ADD	L
+	LHLD	TMP
+	MOV	M,A
+	INX	H
+	MVI	M,000H
+	RET
+;;;;;;;;;;;;;;;;;;;;;;;
+;	AHL = TOKEN(DE:/[A-Z]*/)
+;;;;;;;;;;;;;;;;;;;;;;;
+VAL27:	LXI	H,00000H
+	MVI	B,000H
+VAL271:	LDAX	D
+	CPI	05BH
+	JNC	VAL279
+	SUI	040H
+	JC	VAL279
+	INX	D
+	MOV	C,A
+VAL272:	MOV	A,B
+	PUSH	D
+	MOV	E,C
+	CALL	MUL27
+	MOV	B,A
+	POP	D
+	ORA	A
+;	JNZ	WARM
+	JMP	VAL271
+VAL279:	MOV	A,B
+	RET
+;;;;;;;;;;;;;;;;;;;;;;
+;	AHL = TOKEN
+;	E = INDEX
+;;;;;;;;;;;;;;;;;;;;;;
+TOKFND:	MOV	D,A
+	MOV	A,L
+	CMA
+	ADI	001H
+	MOV	C,A
+	MOV	A,H
+	CMA
+	ACI	000H
+	MOV	B,A
+	MOV	A,D
+	CMA
+	ACI	000H
+	MOV	D,A
+	MVI	E,07FH
+	LXI	H,TOKTBL
+TOKFN1:	INR	E
+	PUSH	B
+	PUSH	D
+	INX	H
+	MOV	D,M
+	INX	H
+	MOV	E,M
+	INX	H
+	MOV	A,M
+	ORA	D
+	ORA	E
+	MVI	A,0FFH
+	JZ	TOKFN2
+	MOV	A,D
+	MOV	D,M
+	INX	H
+	XCHG
+	DAD	B
+	XCHG
+	MOV	B,D
+	MOV	C,E
+	POP	D
+	ADC	D
+	ORA	B
+	ORA	C
+	POP	B
+	JNZ	TOKFN1
+	MOV	A,E
+	STC
+	RET
+TOKFN2:	POP	D
+	POP	B
+	RET
+;;;;;;;;;;;;;;;;;;;;;;
+TOKTBL:	DW	00D00H,0B75DH	; ARRAY
+	DW	01100H,0CD41H	; BEGIN
+	DW	01B00H,0FCE1H	; CLEAR
+	DW	01C00H,01B34H	; CLOSE
+	DW	00000H,009E2H	; CLS
+	DW	00000H,00AD4H	; CUR
+	DW	00100H,03882H	; DATA
+	DW	00000H,00C64H	; DIM
+	DW	00000H,00FBBH	; END
+	DW	02C00H,0F9ACH	; ENTER
+	DW	02D00H,0F88AH	; ERASE
+	DW	00000H,012BDH	; FOR
+	DW	03D00H,07D38H	; GOSUB
+	DW	00200H,04717H	; GOTO
+	DW	00200H,09333H	; HOME
+	DW	00000H,000F9H	; IF
+	DW	04D00H,05FBEH	; INPUT
+	DW	00000H,01B2FH	; INT
+	DW	00300H,0A997H	; LEFT
+	DW	06E00H,02A5DH	; MOUSE
+	DW	00400H,04543H	; NEXT
+	DW	08200H,049C6H	; PAUSE
+	DW	08600H,05B8CH	; POINT
+	DW	08700H,04235H	; PRINT
+	DW	00500H,07652H	; READ
+	DW	00000H,033D6H	; REM
+	DW	09400H,0BFC8H	; RIGHT
+	DW	00000H,03911H	; TAB
+	DW	00600H,01919H	; THEN
+	DW	0A500H,0086DH	; TIMER
+	DW	00000H,0022BH	; TO
+	DW	0AE00H,0B922H	; UNTIL
+	DW	00000H,03DE0H	; USR
+	DW	00000H,03ECDH	; VAL
+	DW	0BD00H,004A9H	; WHILE
+;;;;;;;;;;;;;;;;;;;;;;
+PADHNT:	DB	13,10,32,' redaktor teksta "POBEDIT"'
+	DB	13,10,32,' _________________________'
+	DB	13,10,32,' |to programmnaq zaglu{ka.',10
+	DB	13,10,32,' dlq puska redaktora vmite:'
+	DB	13,10,32,' N/n/probel - prostoj pusk'
+	DB	13,10,32,' D/d/Y/wk - s assistentom movno'
+	DB	' udalqtx stroki navatiem us+D,'
+	DB	13,10,32,' prokru~iwatx listing navatiem us+U/K/E/W,'
+	DB	13,10,32,' a takve widetx razli~nu` informaci`'
+	DB	' testirowaniq algoritmow..',0
+
+SAVEHL:	DW	0
+SAVEA:	DB	0
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+	ORG	00FFFH
+	DB	0
+PROGR1:
+	DB	'F1 - perekl`~enie po sprawke (esli ukazan CALLBACK)',13,13
+	DB	32,32,32,'_____________________________'
+	DB	'_____________________________',13
+	DB	'###',9,9,9,9,9,9,9,32,32,32,32,32,'###',13
+	DB	'### |krannyj redaktor '
+	DB	'"POBEDIT V2023.0427"',
+	DB	' - BY (C)ALIKBEROV ###',13
+	DB	'###_____________________________'
+	DB	'_____________________________###',13,13
+TABULS:
+	DB	'1. poddervka tabulqcii i do 254 simwolow na stroku',13
+	DB	'2. klawi{i HOME/ps/str ',14,' HOME/DELETE/END w '
+	DB	'|mulqtore //RK86.RU/',13
+	DB	'3. swetowoe pero za predelami oblasti - prokrutka'
+	DB	' |krana',13
+	DB	'4. F1-F4/ar2/us+A-Z ili dwojnoj klik pera - '
+	DB	'kompilqtor/otlad~ik',13,13
+	DB	9,'1234567',9,'123456',9,'12345'
+	DB	9,'1234',9,'123',9,'12',9,'1',13
+	DB	'1 3 5 7 9 12 15 18 21 24 27 '
+	DB	'30 33 36 39 42 45 48 51 54 57 '
+	DB	'60 63 66 69 72 75 78 81 84 87 '
+	DB	'90 93 96 99 103 107 111 115 119 123 127';,13
+	DB	' 131 135 139 143 147 151 155 159 163 167 171'
+	DB	' 175 179 183 187 191 195 199 203 207 211 215'
+	DB	' 219 223 227 231 235 239 243 247 251 25',13
+	DB	'1',9,'12',9,'123',9,'1234',9
+	DB	'12345',9,'123456',9,'1234567',9,'12345678',13,13
+	DB	32,' polnostx` razrabatywaetsq/otlaviwaetsq '
+	DB	'w |mulqtore //RK86.RU/',13,13
+	DB	'DIM N$(11),W$(6),K(12),JK$(11)',13
+	DB	'CLS:CUR 17,24:PRINT  "we~nyj kalendarx (ot 1581g.)"',13
+	DB	'FOR I=0 TO 11: READ N$(I): NEXT I',13
+	DB	'FOR I=0 TO 6: READ W$(I): NEXT I',13
+	DB	'FOR I=0 TO 11:READ K(I): NEXT I',13
+	DB	'FOR I=0 TO 11: READ JK$(I): NEXT I',13
+	DB	'70 PRINT : PRINT  TAB(17);"wwedite:mesqc,god";:INPUT ME,G',13
+	DB	'80 XY=0: D=1:IF G/4=INT(G/4) THEN K(1)=29',13
+	DB	'REM * poprawka na stilx letois~isleniq *',13
+	DB	'IF G<1918 THEN D=0',13
+	DB	'GE=G:M=ME',13
+	DB	'GOSUB 140: GOTO 220',13
+	DB	'REM * wy~islenie dnq nedeli *',13
+	DB	'140 IF M>=3 THEN M=M-2: GOTO 170',13
+	DB	'IF M<3 THEN M=M+10',13
+	DB	'IF M>10 THEN G=G-1',13
+	DB	'170 CE=INT(G/100): G=G-CE*100',13
+	DB	'Z=INT(2.6*M-0.1):DD=Z+D+G+INT(G/4)+INT(CE/4)-2*CE',13
+	DB	'L=DD+777 : DN=L-7*INT(L/7)',13
+	DB	'IF DN=0 THEN DN=7',13
+	DB	'RETURN',13
+	DB	'220 CLS: CUR 4,24',13
+	DB	'GOSUB 760',13
+	DB	'Y=DN-1 : SP=21 :U=2',13
+	DB	'REM * cikl mesqcew *',13
+	DB	'260 FOR I=ME-1 TO 11 STEP 2',13
+	DB	'IF I+1>11 THEN U=1',13
+	DB	'IF I=ME+7 OR I=ME+3 OR I=ME+11 THEN GOSUB 620',13
+	DB	'CUR 23,SP: PRINT  N$(I)',13
+	DB	'IF U<>1 THEN CUR 44,SP:PRINT  N$(I+1)',13
+	DB	'REM * cikl dnej nedeli *',13
+	DB	'FOR SH=0 TO 6',13
+	DB	'CUR 0,SP-SH-1: PRINT  W$(SH): NEXT SH',13
+	DB	'X=15',13
+	DB	'FOR V=1 TO U: IF V=1 THEN DK=I',13
+	DB	'IF V=2 THEN DK=I+1',13
+	DB	'REM * cikl ~isel *',13
+	DB	'FOR J=1 TO K(DK)',13
+	DB	'Y=Y+1',13
+	DB	'IF SP-Y=SP-8 THEN Y=1: X=X+3',13
+	DB	'CUR X,SP-Y: PRINT  J',13
+	DB	'NEXT J',13
+	DB	'X=36: NEXT V',13
+	DB	'SP=SP-9: NEXT I: XY=1',13
+	DB	'REM * pe~atx risunka *',13
+	DB	'GOSUB 620: CLS: CUR 0,24',13
+	DB	'PRINT  TAB(6); "{"',13
+	DB	'PRINT  TAB(5); "{{{"',13
+	DB	'PRINT  TAB(4); "{{{{{"',13
+	DB	'PRINT  TAB(3); "{{{{{{{"',13
+	DB	'PRINT  TAB(2); "{{{{{{{{{"',13
+	DB	'PRINT  TAB(1); "{{{{{{{{{{{"',13
+	DB	'PRINT "{{{{{{{{{{{{{"',13
+	DB	'PRINT  TAB(6);"{"',13
+	DB	'PRINT  TAB(6);"{"',13
+	DB	'GE=GE+1: PRINT  TAB(17);"s  nowym  godom !!!"',13
+	DB	'GOSUB 760',13
+	DB	'PR=USR(-2045)',13
+	DB	'CLS',13
+	DB	'U=2:K(1)=28',13
+	DB	'IF GE=1918 THEN ME=1:G=1918 :GOTO 80',13
+	DB	'CLS',13
+	DB	'CUR 0,24',13
+	DB	'GOSUB 760: ME=1: IF GE/4=INT(GE/4) THEN K(1)=29',13
+	DB	'GOTO 260',13
+	DB	'REM * wwod dannym i ih obrabotka dlq prodolveniq pe~ati *',13
+	DB	'620 CUR 22,2: INPUT "dalx{e (da/net)"; DA$',13
+	DB	'IF LEFT$(DA$,1)<>"d" AND LEFT$(DA$,1)<>"D" THEN 660',13
+	DB	'CLS: SP=21: IF XY=1 THEN XY=0:RETURN',13
+	DB	'CLS:CUR 0,24: GOSUB 760: RETURN',13
+	DB	'660 CLS:CUR 10,22: PRINT  "dolgih wam let vizni !!!"',13
+	DB	'K(1)=28: GOTO 70',13
+	DB	'REM * opisanie dannyh *',13
+	DB	'DATA qnwarx,fewralx,mart,aprelx,maj,i`nx',13
+	DB	'DATA i`lx,awgust,sentqbrx,oktqbrx,noqbrx,dekabrx',13
+	DB	'DATA ponedelxnik,wtornik,sreda,~etwerg,pqtnica,subbota,woskresenxe',13
+	DB	'DATA 31,28,31,30,31,30,31,31,30,31,30,31',13
+	DB	'DATA obezxqny,kuricy,sobaki,swinxi,my{i,korowy',13
+	DB	'DATA tigra,zajca,drakona,zmei,lo{adi,owcy',13
+	DB	'REM *opredelenie i wywod nazwanie goda po wosto~nomu kalendar`*',13
+	DB	'760 OS=GE-12*INT(GE/12)',13
+	DB	'W$=JK$(OS)',13
+	DB	'PRINT  TAB(5);"po wosto~nomu kalendar` ";GE;" god - god ";W$',13
+	DB	'GC=GE-1563-INT((GE-1564)/60)*60',13
+	DB	'CO=VAL(RIGHT$(STR$(GC),1))',13
+	DB	'IF CO=1 OR CO=2 THEN CO$="sinij":GOTO 860',13
+	DB	'IF CO=3 OR CO=4 THEN CO$="krasnyj":GOTO 860',13
+	DB	'IF CO=5 OR CO=6 THEN CO$="veltyj":GOTO 860',13
+	DB	'IF CO=7 OR CO=8 THEN CO$="belyj" :GOTO 860',13
+	DB	'CO$="~ernyj"',13
+	DB	'860 PRINT  TAB(17); "cwet goda-"; CO$',13
+	DB	'RETURN',13
+	DB	'ARRAY BEGIN CLEAR CLOSE DATA END ENTER ERASE FOR HOME '
+	DB	'INPUT MOUSE POINT READ REM TIMER UNTIL WHILE',13
+	DB	13,13
+	DB	9,'PRINT 16777214',13
+	DB	9,9,'PRINT 2.71828182',13
+	DB	9,9,'PRINT 3.14159263',13,13,13
+	DB	'/BOURREE',13
+	DB	'/G. F. HANDEL',13
+	DB	'<6',13
+	DB	'K1 #1 NS=70',13
+	DB	'PA',13
+	DB	'M1 *Q8,',9,9,'V2*Q6,',9,9,'V3@Q3',13
+	DB	'M2 *Q8,6,I765,4, V2*Q5,4,3-1',9,'V3@Q4365',13
+	DB	'M3 *Q9HBIA9',9,'V2*Q498I4',9,'V3@Q7010',13
+	DB	'M4 *Q8I7,6,567,5 V2*Q3$43',9,'V3@Q+130+1',13
+	DB	'M5 *Q6H4Q5',9,'V2*Q4H1Q3',9,'V3@Q+13A6C',13
+	DB	'M6 *I67*8,6,$89,7 V2*Q4542',9,'V3@Q3452',13
+	DB	'M7 *I89A,8,9AB,9 V2*Q5"5"5"7#',9,'V3@Q4+10#2',13
+	DB	'M8 *IABQC$7#',9,'V2*H8Q52',9,'V3@Q+1429',13
+	DB	'M9 *H.8',9,9,'V2*H.3',9,9,'V3@Q6I+10#Q+1',13
+	DB	'PB RA',13
+	DB	'PC',13
+	DB	'M17 *QC',9,9,'V2*QA',9,9,'V3@Q6',13
+	DB	'M18 *QCAIBA98',9,'V2*QA8I8',9,'V3@Q+12+10',13
+	DB	'M19 *QBHDQ9',9,'V2*Q11-10Q12',9,'V3@Q1I32Q10',13
+	DB	'M20 *Q8#9AIBC',9,'V2*Q3498',9,'V3@Q1521',13
+	DB	'M21 *QBH9Q8',9,'V2*Q6H4Q3',9,'V3@Q5"5+21',13
+	DB	'M22 *Q8I76Q7"7',9,'V2*Q2"H2"Q2',9,'V3@Q53#29',13
+	DB	'M23 *Q7I65Q68',9,'V2*Q1"H1Q4',9,'V3@Q6432',13
+	DB	'M24 *I9AB9ABCA',9,'V2*H45',9,9,'V3@Q02+10',13
+	DB	'M25 *IBCDBCDEC',9,'V2*H8"8',9,9,'V3@Q1346',13
+	DB	'M26 *QDICBABCA',9,'V2*Q8I76Q58',9,'V3@Q31+10',13
+	DB	'M27 *IBCDBQC7',9,'V2*Q8"880',9,'V3@Q1342',13
+	DB	'M28 *Q6I543453',9,'V2*Q1',9,9,'V3@Q31+10',13
+	DB	'M29 *I45645675',9,'V2*I1$$$1',9,'V3@1346',13
+	DB	'M30 *I67Q86I54',9,'V2*I1#Q$10',9,'V3@Q386D',13
+	DB	'M31 *H.4',9,'V2*H.-1',9,9,'V3@H.A',13
+	DB	'PD RC',0
+
+	ORG	02FFFH
+	DB	0
+PROGR2:
+	DB	'F1 - perekl`~enie po sprawke (esli ukazan CALLBACK)',13
+	DB	13,'wyzowy',13
+	DB	9,'F003',9,'zapusk s assistentom (HL - CALLBACK-adres)',13
+	DB	9,'F006',9,'predustanowitx adres bufera listinga',13
+	DB	9,'F009',9,'perekl`~itx bufer listinga (HL - adres)',13
+	DB	9,'F00C',9,'prokrutka panoramy (CF: 0-wpered / 1-nazad)',13
+	DB	9,'F00F',9,'prokrutka teksta (CF: 0-wpered / 1-nazad)',13
+	DB	9,'F012',9,'pomestitx w stek adres znakomesta (DB X,Y)',13
+	DB	9,'F018',9,'pomestitx w stek adres znakomesta (E=X,D=Y)',13
+	DB	9,'F01B',9,'pomestitx w stek adres znakomesta bez korrekcii',13
+	DB	13
+	DB	'q~ejki korrektirowki pozicionirowaniq',13
+	DB	9,'F018-F01A - korrektirowka znakomest rastra (-3..+3)',13
+	DB	9,'F040/F041 - korrektirowka pozicii kursora (oby~no 8 i 3)',13
+	DB	9,'762E',9,32,' - korrektirowka znakomest swetowogo pera',13,13
+	DB	'q~ejki stilizacii (i klawi{i)',13
+	DB	9,'7629',9,32,' - (ar2) stilx zapolneniq tabulqcii',13
+	DB	9,'762A',9,32,' - (F3) stilx lewogo kraq',13
+	DB	9,'762B',9,32,' - (F4) stilx prawogo kraq',13
+	DB	9,'762D',9,32,' - (F2) maskirowanie numeracii strok',13
+	DB	9,'7633',9,32,' - kod simwola perepolneniq panoramy',13
+	DB	13
+	DB	'sluvebnye q~ejki redaktora (monitora)',13
+	DB	9,'7614',9,'PC - CALLBACK na polxzowatelxskij kod',13
+	DB	9,'7616',9,'HL - adresnaq ssylka w tekstowu` oblastx',13
+	DB	9,'7618',9,'BC - nomer stroki',13
+	DB	9,'761A',9,'DE - poziciq kursora w predelah regiona',13
+	DB	9,'761C',9,'SP - ukazatelx na teku}u` stroku',13
+	DB	9,'761E',9,'AF - zna~enie panoramnoj prokrutki i flagi',13
+	DB	9,'7634',9,'ukazatelx na 25 strok wy{e (dlq PAGE UP)',13
+	DB	9,'7636',9,'ukazatelx na 1 stroku wy{e (skrytu`)',13
+	DB	9,'[7638..',9,'ukazateli na 25 otobravennyh strok',13
+	DB	9,'..7668]',9,'ukazatelx na 25 stroku',13
+	DB	9,'766A',9,'ukazatelx na nivn`` skrytu` stroku (dlq PAGE DOWN)',13
+	DB	9,'766C',9,'nomer werhnej skrytoj stroki dlq prokrutki',13
+	DB	9,'766E',9,'nomer nivnej skrytoj stroki dlq prokrutki',13
+	DB	13
+	DB	'primer kalibrowki znakomest',13
+	DB	9,'standartnoe pozicionirowanie',13
+	DB	9,9,'F018',9,'00 00 00',13
+	DB	9,9,'F040',9,'08 03',13,13
+	DB	9,'sme}enie na 1 znakomesto wprawo',13
+	DB	9,9,'F018',9,'13 00 00',13
+	DB	9,9,'F040',9,'09 03',13,13
+	DB	9,'sme}enie na 2 znakomesta wprawo',13
+	DB	9,9,'F018',9,'13 13 00',13
+	DB	9,9,'F040',9,'0A 03',13,13
+	DB	9,'sme}enie na 3 znakomesta wprawo',13
+	DB	9,9,'F018',9,'13 13 13',13
+	DB	9,9,'F040',9,'0B 03'
+	DB	0
+
+	ORG	04FFFH
+	DB	0
+PROGR3:
+	DB	'F1 - perekl`~enie po sprawke (esli ukazan CALLBACK)',13,13
+	DB	32,32,32,'_____________________________'
+	DB	'_____________________________',13
+	DB	'###',9,9,9,9,9,9,9,32,32,32,32,32,'###',13
+	DB	'### |krannyj redaktor '
+	DB	'"POBEDIT V2023.0427"',
+	DB	' - BY (C)ALIKBEROV ###',13
+	DB	'###_____________________________'
+	DB	'_____________________________###',13,13
+	DB	'esli ukazan CALLBACK-adres na kod polxzowatelq / parsera',13
+	DB	'pri obra}eniqh k nemu peredaetsq sledu`}aq informaciq:',13
+	DB	13,9,'HL - adres na~ala redaktiruemoj stroki',13
+	DB	9,'BC - porqdkowyj nomer redaktiruemoj stroki'
+	DB	' w listinge',13
+	DB	9,'DE - adres werhnej otobravaemoj stroki w bufere',13
+	DB	9,'A - nomer kolonki s kursorom s u~etom panoramy',13,13
+	DB	9,'flag CF - otrisowka |krana / klik pera / kursor',13
+	DB	9,'flag PF - dwojnoj klik pera po znakomestu',13
+	DB	9,'flag ZF - klawi{i F1-F4, ar2 ili us+A-Z',13
+	DB	9,'flag SF - bufernaq stroka / redaktirowanie'
+	DB	0
